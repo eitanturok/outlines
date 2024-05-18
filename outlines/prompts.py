@@ -3,11 +3,14 @@ import inspect
 import json
 import re
 import textwrap
+from collections import abc
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Type, cast
 
 from jinja2 import Environment, StrictUndefined
 from pydantic import BaseModel
+
+from outlines.fsm.json_schema import get_schema_from_signature
 
 
 @dataclass
@@ -207,6 +210,7 @@ def render(template: str, **values: Optional[Dict[str, Any]]) -> str:
     env.filters["source"] = get_fn_source
     env.filters["signature"] = get_fn_signature
     env.filters["schema"] = get_schema
+    env.filters["tool_schema"] = get_tool_schema
 
     jinja_template = env.from_string(cleaned_template)
 
@@ -323,3 +327,34 @@ def parse_pydantic_schema(raw_schema, definitions):
             simple_schema[name] = f"<{name}>"
 
     return simple_schema
+
+
+@functools.singledispatch
+def get_tool_schema(tool: Any):
+    raise NotImplementedError(
+        f"No schema rendering function defined for type {type(tool)}."
+    )
+
+
+@get_tool_schema.register(type(BaseModel))
+def get_tool_schema_pydantic(tool: Type[BaseModel]):
+    tool_schema = json.dumps(tool.model_json_schema())
+    return tool_schema
+
+
+@get_tool_schema.register(abc.Callable)
+def get_tool_schema_callable(tool: Callable):
+    tool_schema = json.dumps(get_schema_from_signature(tool))
+    return tool_schema
+
+
+@get_tool_schema.register(dict)
+def get_tool_schema_dict(tool: Dict):
+    tool_schema = json.dumps(tool)
+    return tool_schema
+
+
+@get_tool_schema.register(str)
+def get_tool_schema_str(tool: str):
+    tool_schema = tool
+    return tool_schema
