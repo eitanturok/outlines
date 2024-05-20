@@ -342,7 +342,7 @@ def get_tool_schema_pydantic(tool: Type[BaseModel]):
     return tool_schema
 
 
-@get_tool_schema.register(abc.Callable)
+@get_tool_schema.register(type(abc.Callable))
 def get_tool_schema_callable(tool: Callable):
     tool_schema = json.dumps(get_schema_from_signature(tool))
     return tool_schema
@@ -351,10 +351,4 @@ def get_tool_schema_callable(tool: Callable):
 @get_tool_schema.register(dict)
 def get_tool_schema_dict(tool: Dict):
     tool_schema = json.dumps(tool)
-    return tool_schema
-
-
-@get_tool_schema.register(str)
-def get_tool_schema_str(tool: str):
-    tool_schema = tool
     return tool_schema
