@@ -6,7 +6,7 @@ def main():
 
     model = models.tinygradlm("Qwen/QwQ-32B-Preview")
     generator = generate.text(model)
-    answer = generator("A prompt", temperature=2.0)
+    answer = generator("My favorite puppy is")
     ic(answer)
 
 if __name__ == '__main__':

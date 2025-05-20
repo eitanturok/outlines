@@ -75,7 +75,7 @@ class Transformer:
     self.lm_head = Linear(dim, vocab_size, bias=False)
     self.forward_jit = TinyJit(self.forward)
 
-  def forward(self, tokens:Union[Tensor,UOp], start_pos:Variable, temperature:float=0.0):
+  def forward(self, tokens:Union[Tensor,UOp], start_pos:Variable, temperature:float=0.0, return_logits:bool=False) -> Tensor|tuple[Tensor, Tensor]:
     if not hasattr(self, 'allpos'): self.allpos = Tensor.arange(0, MAX_CONTEXT).reshape(1, -1).realize()
     if isinstance(tokens, UOp):
       seqlen = 1
@@ -105,11 +105,11 @@ class Transformer:
       ret = logits.argmax(-1)
     else:
       ret = (logits / temperature).softmax().multinomial()
-    return ret.flatten().realize()
+    return (ret.flatten().realize(), logits.realize()) if return_logits else ret.flatten().realize()
 
-  def __call__(self, tokens:Union[Tensor,UOp], start_pos:Variable, temperature:float=0.0) -> Tensor:
+  def __call__(self, tokens:Union[Tensor,UOp], start_pos:Variable, temperature:float=0.0, return_logits:bool=False) -> Tensor|tuple[Tensor,Tensor]:
     forward = (self.forward_jit if JIT and (isinstance(tokens, UOp) or tokens.shape[1] == 1) else self.forward)
-    return forward(tokens, start_pos, temperature)
+    return forward(tokens, start_pos, temperature, return_logits)
 
 VOCAB_SIZE = 50257
 MODEL_PARAMS = {
