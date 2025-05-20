@@ -52,7 +52,7 @@ mlxlm = ["mlx-lm", "datasets"]
 openai = ["openai"]
 llamacpp = ["llama-cpp-python", "transformers", "datasets", "numpy<2"]
 exllamav2 = ["exllamav2"]
-tinygrad = ["tinygrad[extra]==0.10.3", "transformers"]
+tinygrad = ["tinygrad==0.10.3", "transformers"]
 test = [
     "pre-commit",
     "pytest",

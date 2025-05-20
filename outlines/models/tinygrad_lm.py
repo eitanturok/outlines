@@ -2,27 +2,17 @@ import os
 from pathlib import Path
 from typing import Dict, Union, Optional
 
-from .transformers import TransformerTokenizer
-
-from .llama import Transformer, convert_from_huggingface, fix_bf16
-from .llama3 import load
-from tinygrad import nn, Tensor
 from tinygrad.helpers import fetch
-from tinygrad.nn.state import load_state_dict
+from tinygrad.nn.state import torch_load, load_state_dict
 
 from transformers import PreTrainedTokenizer
 
 from outlines.generate.api import GenerationParameters, SamplingParameters
 from outlines.processors import OutlinesLogitsProcessor
 
+from .transformers import TransformerTokenizer
+from .gpt2 import Transformer, MODEL_PARAMS
 
-MODELS = {
-    "32B": {
-        "model_params": {"dim": 5120, "n_heads": 40, "n_kv_heads": 8, "n_layers": 64, "norm_eps": 1e-5, "rope_theta": 1000000, "vocab_size": 152064, "hidden_dim": 27648},
-        "total_num_weights": 17,
-        "tokenizer": "Qwen/QwQ-32B-Preview"
-    }
-}
 
 class TinygradLM:
     """
@@ -36,42 +26,27 @@ class TinygradLM:
     ):
         self.model = model
         self.mlx_tokenizer = tokenizer  # returns mlx tensors, used for encode()
-        self.tokenizer = TransformerTokenizer(
-            tokenizer._tokenizer
-        )  # _tokenizer is HF Tokenizer
+        self.tokenizer = tokenizer
 
 
-def download_weights(total_num_weights:int) -> Path:
-    model = fetch("https://huggingface.co/Qwen/QwQ-32B-Preview/resolve/main/model.safetensors.index.json?download=true", "model.safetensors.index.json", subdir=(subdir:="qwq_32b_preview"))
+def build_gpt2_tokenizer():
+    import tiktoken
+    return tiktoken.get_encoding("gpt2")
 
-    for i in range(1, total_num_weights + 1):
-        filename = f"model-{i:05d}-of-{total_num_weights:05d}.safetensors"
-        fetch(f"https://huggingface.co/Qwen/QwQ-32B-Preview/resolve/main/{filename}?download=true", filename, subdir=subdir)
+def build_gpt2_model(model_size):
+    model = Transformer(**MODEL_PARAMS[model_size])
+    weights = torch_load(fetch(f'https://huggingface.co/{model_size}/resolve/main/pytorch_model.bin'))
 
-    return Path(os.path.dirname(model))
+    # special treatment for the Conv1D weights we need to transpose
+    transposed = ('attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight')
+    for k in weights:
+      if k.endswith(transposed):
+        weights[k] = weights[k].T
+    # lm head and wte are tied
+    weights['lm_head.weight'] = weights['wte.weight']
 
-
-def load_model(model_path:Path, model_params:Dict[str, Union[int, float]]) -> Transformer:
-    # build model
-    model = Transformer(**model_params, linear=nn.Linear)
-
-    # update layers to add bias
-    updated_layers = []
-    for layer in model.layers:
-        head_dim = model_params["dim"] // model_params["n_heads"]
-        layer.attention.wq = nn.Linear(model_params["dim"], model_params["n_heads"] * head_dim, bias=True)
-        layer.attention.wk = nn.Linear(model_params["dim"], model_params["n_kv_heads"] * head_dim, bias=True)
-        layer.attention.wv = nn.Linear(model_params["dim"], model_params["n_kv_heads"] * head_dim, bias=True)
-        updated_layers.append(layer)
-    model.layers = updated_layers
-
-    # load weights
-    weights = fix_bf16(convert_from_huggingface(load(str(model_path / "model.safetensors.index.json")), model_params["n_layers"], model_params["n_heads"], model_params["n_kv_heads"], permute_layers=False))
-
-    # replace weights in model
-    load_state_dict(model, weights, strict=False, consume=True)
+    load_state_dict(model, weights)
     return model
-
 
 def tinygradlm(
     model_name: str,
@@ -111,9 +86,7 @@ def tinygradlm(
             "The `tinygrad` library needs to be installed in order to use `tinygrad` models."
         )
 
-    from transformers import AutoTokenizer
-    model_info = MODELS["32B"]
-    model_path = download_weights(model_info["total_num_weights"])
-    model = load_model(model_path, model_info["model_params"])
-    tokenizer = AutoTokenizer.from_pretrained(model_info["tokenizer"])
+    model = build_gpt2_model("gpt2")
+    tokenizer = build_gpt2_tokenizer()
+
     return TinygradLM(model, tokenizer)
