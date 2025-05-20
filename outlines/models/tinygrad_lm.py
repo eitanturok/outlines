@@ -10,7 +10,6 @@ from tinygrad import nn, Tensor
 from tinygrad.helpers import fetch
 from tinygrad.nn.state import load_state_dict
 
-from outlines.models.tinygradlm import nn
 from transformers import PreTrainedTokenizer
 
 from outlines.generate.api import GenerationParameters, SamplingParameters
@@ -106,7 +105,7 @@ def tinygradlm(
 
     """
     try:
-        from outlines.models.tinygradlm import nn
+        from tinygrad import nn
     except ImportError:
         raise ImportError(
             "The `tinygrad` library needs to be installed in order to use `tinygrad` models."
