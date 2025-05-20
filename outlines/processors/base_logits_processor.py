@@ -7,9 +7,10 @@ from numpy.typing import NDArray
 
 if TYPE_CHECKING:
     import mlx.core as mx
+    import tinygrad
 
 
-Array = Union[NDArray, torch.Tensor, List, "mx.array"]
+Array = Union[NDArray, torch.Tensor, List, "mx.array", "tinygrad.Tensor"]
 
 
 def is_mlx_array_type(array_type):
@@ -28,6 +29,13 @@ def is_jax_array_type(array_type):
     return issubclass(array_type, jaxlib.xla_extension.ArrayImpl) or isinstance(
         array_type, jaxlib.xla_extension.ArrayImpl
     )
+
+def is_tinygrad_array_type(array_type):
+    try:
+        import tinygrad
+    except ImportError:
+        return False
+    return issubclass(array_type, tinygrad.Tensor)
 
 
 class OutlinesLogitsProcessor(Protocol):
@@ -152,6 +160,11 @@ class OutlinesLogitsProcessor(Protocol):
             import jax
 
             return jax.dlpack.from_dlpack(tensor)
+
+        elif is_tinygrad_array_type(target_type):
+            import tinygrad
+
+            return tinygrad.Tensor(tensor)
 
         else:
             raise TypeError(
