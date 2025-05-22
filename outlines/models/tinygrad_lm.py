@@ -3,7 +3,7 @@ import inspect
 from typing import Optional, Generator, Tuple, Union, List, Iterator
 
 import torch
-from tinygrad import Tensor, Device, nn, dtypes
+from tinygrad import Tensor, Device, nn, dtypes, Variable
 from tinygrad.nn.state import load_state_dict
 
 from outlines.models.tokenizer import Tokenizer
@@ -11,78 +11,19 @@ from outlines.generate.api import GenerationParameters, SamplingParameters
 from outlines.processors import OutlinesLogitsProcessor
 
 from .gpt2 import Transformer, MODEL_PARAMS
+from .transformers import TransformerTokenizer
 from .transformers import get_llama_tokenizer_types
 
 KVCacheType = Tuple[Tuple["tinygrad.Tensor", "tinygrad.Tensor"], ...]
 
-
-class TinygradTokenizer(Tokenizer):
-    """Represents a tokenizer for models in the `transformers` library."""
-
-    def __init__(self, tokenizer: "PreTrainedTokenizer", **kwargs):
-        self.tokenizer = tokenizer
-        self.eos_token_id = self.tokenizer.eos_token_id
-        self.eos_token = self.tokenizer.eos_token
-
-        if self.tokenizer.pad_token_id is None:
-            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
-            self.pad_token_id = self.eos_token_id
-        else:
-            self.pad_token_id = self.tokenizer.pad_token_id
-            self.pad_token = self.tokenizer.pad_token
-
-        self.special_tokens = set(self.tokenizer.all_special_tokens)
-
-        self.vocabulary = self.tokenizer.get_vocab()
-        self.is_llama = isinstance(self.tokenizer, get_llama_tokenizer_types())
-
-    def encode(
-        self, prompt: Union[str, List[str]], **kwargs
-    ) -> Tuple["tinygrad.Tensor", "tinygrad.Tensor"]:
-        kwargs["padding"] = True
-        kwargs["return_tensors"] = "pt"
-        output = self.tokenizer(prompt, **kwargs)
-        # convert tensor from pytorch to tinygrad
-        output = {k: Tensor(v.numpy()) if isinstance(v, torch.Tensor) else v for k, v in output.items()}
-        return output["input_ids"], output["attention_mask"]
-
+class TinygradTokenizer(TransformerTokenizer):
+    """Represents a tokenizer for models in the `transformers` library using `tinygrad`."""
+    def encode(self, prompt: Union[str, List[str]], **kwargs) -> Tuple["tinygrad.Tensor", "tinygrad.Tensor"]:
+        input_ids, attention_mask = super().encode(prompt, **kwargs)
+        return Tensor(input_ids.numpy()), Tensor(attention_mask.numpy())
     def decode(self, token_ids: "tinygrad.Tensor") -> List[str]:
-        text = self.tokenizer.batch_decode([x.cast(dtypes.uint).tolist() for x in token_ids], skip_special_tokens=True)
-        return text
-
-    def convert_token_to_string(self, token: str) -> str:
-        from transformers.file_utils import SPIECE_UNDERLINE
-
-        string = self.tokenizer.convert_tokens_to_string([token])
-
-        if self.is_llama:
-            # A hack to handle missing spaces to HF's Llama tokenizers
-            if token.startswith(SPIECE_UNDERLINE) or token == "<0x20>":
-                return " " + string
-
-        return string
-
-    def __eq__(self, other):
-        if isinstance(other, type(self)):
-            if hasattr(self, "model_name") and hasattr(self, "kwargs"):
-                return (
-                    other.model_name == self.model_name and other.kwargs == self.kwargs
-                )
-            else:
-                return other.tokenizer == self.tokenizer
-        return NotImplemented
-
-    def __hash__(self):
-        from datasets.fingerprint import Hasher
-
-        return hash(Hasher.hash(self.tokenizer))
-
-    def __getstate__(self):
-        state = {"tokenizer": self.tokenizer}
-        return state
-
-    def __setstate__(self, state):
-        self.__init__(state["tokenizer"])
+        token_ids = [x.cast(dtypes.uint).tolist() for x in token_ids]
+        return super().decode(token_ids)
 
 
 class TinygradLM:
@@ -141,9 +82,10 @@ class TinygradLM:
         #     )
 
         n_tokens = input_ids.shape[-1]
+        ic(input_ids.shape)
         Tensor.training = False
         Tensor.no_grad = True
-        _, logits = self.model(input_ids, Variable("start_pos", 1, n_tokens).bind(1), return_logits=True)
+        _, logits = self.model(input_ids, Variable("start_pos", 1, n_tokens+1).bind(1), return_logits=True)
         return logits, None
 
     def __call__(
@@ -154,7 +96,7 @@ class TinygradLM:
     ) -> Tuple["tinygrad.Tensor", Optional["tinygrad.Tensor"]]:
         logits, kv_cache = self.forward(input_ids, attention_mask, past_key_values)
         next_token_logits = logits[..., -1, :]
-
+        ic(logits.shape, next_token_logits.shape)
         return next_token_logits, kv_cache
 
     def generate(
@@ -209,6 +151,7 @@ class TinygradLM:
             sampling_parameters,
         )
         generated_ids = self._generate_output_seq(prompts, inputs, **generation_kwargs)
+        ic(generated_ids.shape)
 
         # if single str input and single sample per input, convert to a 1D output
         if isinstance(prompts, str):
@@ -311,18 +254,36 @@ class TinygradLM:
     def _generate_output_seq(
         self, prompts, inputs, generation_config, **generation_kwargs
     ):
-        input_ids = inputs["input_ids"]
+        toks = inputs["input_ids"]
         attention_mask = None # inputs["attention_mask"]
         past_key_values = None
+        temperature = generation_config.temperature
+        start_pos = 0
         ic(generation_config, generation_kwargs)
-        output_ids, _ = self(input_ids, attention_mask, past_key_values)
+
+        for _ in range(max_length):
+            if batch_size == 1 and len(toks[0][start_pos:]) == 1:
+                tokens = Variable("tokens", 0, VOCAB_SIZE).bind(toks[0][start_pos])
+            else:
+                tokens = Tensor([x[start_pos:] for x in toks])
+            logits, _ = self.model(tokens, Variable("start_pos", 1 if start_pos else 0, MAX_CONTEXT-1).bind(start_pos), temperature, return_logits=True)
+            start_pos = len(toks[0])
+            tok = generation_kwargs['logits_processor'](logits)
+            for i,t in enumerate(tok): toks[i].append(t)
+
+
+        for _ in range(generation_config.max_new_tokens):
+            logits, _ = self(input_ids, attention_mask, past_key_values)
+            token = generation_kwargs['logits_processor'](logits)
+            input_ids.append(token)
+
 
         # encoder-decoder returns output_ids only, decoder-only returns full seq ids
         # if self.model.config.is_encoder_decoder:
         #     generated_ids = output_ids
         # else:
         #     generated_ids = output_ids[:, input_ids.shape[1] :]
-        generated_ids = output_ids
+        generated_ids = input_ids
         ic(generated_ids)
 
         # if batch list inputs AND multiple samples per input, convert generated_id to 3D view
@@ -349,6 +310,71 @@ class TinygradLM:
             raise TypeError(
                 f"Generated outputs aren't 1D, 2D or 3D, but instead are {generated_ids.shape}"
             )
+
+    def generate_step(
+        self,
+        prompt: "tinygrad.Tensor",
+        temp: Optional[float],
+        top_p: Optional[float],
+        sampler: str,
+        logits_processor: "OutlinesLogitsProcessor",
+    ) -> Generator[Tuple[int, float], None, None]:
+        """
+        Adapted from
+        https://github.com/ml-explore/mlx-examples/blob/4872727/llms/mlx_lm/utils.py#L129
+
+        A generator producing token ids based on the given prompt from the model.
+
+        Parameters
+        ----------
+        prompt
+            The input prompt.
+        temp
+            The temperature for sampling, if 0 the argmax is used.
+        top_p
+            Nulceus sampling, higher means model considers more less likely words.
+        sampler
+            The sampler string defined by SequenceGeneratorAdapter
+        logits_processor
+            Augment logits before sampling.
+        """
+
+        temperature: float = temp or 1.0
+
+        def sample(logits: "tinygrad.Tensor") -> Tuple["tinygrad.Tensor", float]:
+            softmax_logits = logits.softmax()
+
+            if temperature == 0.0 or sampler == "greedy":
+                token = logits.argmax(-1)
+            else:
+                raise ValueError(f"Invalid mlx-lm sampler: `{sampler}`")
+
+            prob = softmax_logits[0, token]
+            return token, prob
+
+        # cache = mlx_lm.models.cache.make_prompt_cache(self.model)
+
+        # kv cache contains processed input IDs, we pass the unprocessed inputs and cache to model()
+        unprocessed_input_ids = prompt
+        generated_ids: List[int] = []
+
+        while True:
+            # logits = self.model(unprocessed_input_ids[None], cache=cache)
+            logits = self.model(unprocessed_input_ids[None])
+            logits = logits[:, -1, :]
+
+            if logits_processor is not None:
+                # convert to logits_processor 1d expectation, apply, then convert back
+                logits_1d = logits.reshape(-1)
+                logits_1d = logits_processor(generated_ids, logits_1d)
+                logits = logits_1d.reshape(1, -1)
+
+            new_token_single, prob = sample(logits)
+            new_token = new_token_single.item()
+            yield new_token, prob
+
+            generated_ids.append(new_token)
+            unprocessed_input_ids = new_token_single
 
 
 def build_gpt2_tokenizer():
