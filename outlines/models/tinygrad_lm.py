@@ -1,20 +1,15 @@
 import dataclasses
-import inspect
 from typing import Optional, Generator, Tuple, Union, List, Iterator
 
-import torch
-from tinygrad import Tensor, Device, nn, dtypes, Variable
-from tinygrad.nn.state import load_state_dict
-
-from outlines.models.tokenizer import Tokenizer
+from tinygrad import Tensor, Device, dtypes
+from outlines.models.olmoe import build_olmoe_model, build_olmoe_tokenizer
 from outlines.generate.api import GenerationParameters, SamplingParameters
 from outlines.processors import OutlinesLogitsProcessor
 
-from .gpt2 import Transformer, MODEL_PARAMS
 from .transformers import TransformerTokenizer
-from .transformers import get_llama_tokenizer_types
 
 KVCacheType = Tuple[Tuple["tinygrad.Tensor", "tinygrad.Tensor"], ...]
+
 
 class TinygradTokenizer(TransformerTokenizer):
     """Represents a tokenizer for models in the `transformers` library using `tinygrad`."""
@@ -200,8 +195,12 @@ class TinygradLM:
         ic(unprocessed_input_ids.shape, unprocessed_input_ids.numpy())
 
         while True:
+
+            start_pos = unprocessed_input_ids.shape[1]
+            start_pos = Variable("start_pos", 1 if start_pos else 0, start_pos).bind(start_pos)
+
             # logits = self.model(unprocessed_input_ids[None], cache=cache)
-            _, logits = self.model(unprocessed_input_ids[None], return_logits=True)
+            _, logits = self.model(unprocessed_input_ids[None], start_pos, return_logits=True)
             logits = logits[:, -1, :]
 
             if logits_processor is not None:
@@ -216,28 +215,6 @@ class TinygradLM:
 
             generated_ids.append(new_token)
             unprocessed_input_ids = new_token_single
-
-
-def build_gpt2_tokenizer():
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    return tokenizer
-
-def build_gpt2_model(model_size, device):
-    model = Transformer(**MODEL_PARAMS[model_size])
-    weights = Tensor.from_url(f'https://huggingface.co/{model_size}/resolve/main/pytorch_model.bin').to(device)
-    weights = nn.state.torch_load(weights)
-
-    # special treatment for the Conv1D weights we need to transpose
-    transposed = ('attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight')
-    for k in weights:
-      if k.endswith(transposed):
-        weights[k] = weights[k].T
-    # lm head and wte are tied
-    weights['lm_head.weight'] = weights['wte.weight']
-
-    load_state_dict(model, weights)
-    return model
 
 def tinygradlm(
     model_name: str,
@@ -284,7 +261,7 @@ def tinygradlm(
         device = Device.DEFAULT
 
     print('building model...')
-    model = build_gpt2_model("gpt2", device)
+    model = build_olmoe_model(device)
     print('building tokenizer')
-    tokenizer = build_gpt2_tokenizer()
+    tokenizer = build_olmoe_tokenizer()
     return TinygradLM(model, tokenizer)
