@@ -2,7 +2,7 @@ import dataclasses
 from typing import Optional, Generator, Tuple, Union, List, Iterator
 
 from tinygrad import Tensor, Device, dtypes
-from outlines.models.olmoe import build_olmoe_model, build_olmoe_tokenizer
+from outlines.models.olmoe import build_olmoe_model, build_olmoe_tokenizer, sample
 from outlines.generate.api import GenerationParameters, SamplingParameters
 from outlines.processors import OutlinesLogitsProcessor
 
@@ -130,9 +130,8 @@ class TinygradLM:
 
         # Adapted from
         # https://github.com/ml-explore/mlx-examples/blob/4872727/llms/mlx_lm/utils.py#L267
-        ic(prompts)
         prompt_tokens, _ = self.tokenizer.encode(prompts) # returns input_ids, attention_mask
-        ic(prompt_tokens)
+        ic(prompts, prompt_tokens)
 
         tokens = []
 
@@ -176,31 +175,15 @@ class TinygradLM:
 
         temperature: float = temp or 1.0
 
-        def sample(logits: "tinygrad.Tensor") -> Tuple["tinygrad.Tensor", float]:
-            softmax_logits = logits.softmax()
-
-            if temperature == 0.0 or sampler == "greedy":
-                token = logits.argmax(-1)
-            else:
-                raise ValueError(f"Invalid mlx-lm sampler: `{sampler}`")
-
-            prob = softmax_logits[0, token]
-            return token, prob
-
-        # cache = mlx_lm.models.cache.make_prompt_cache(self.model)
-
         # kv cache contains processed input IDs, we pass the unprocessed inputs and cache to model()
         unprocessed_input_ids = prompt
         generated_ids: List[int] = []
+        start_pos = unprocessed_input_ids.shape[1]
         ic(unprocessed_input_ids.shape, unprocessed_input_ids.numpy())
 
         while True:
 
-            start_pos = unprocessed_input_ids.shape[1]
-            start_pos = Variable("start_pos", 1 if start_pos else 0, start_pos).bind(start_pos)
-
-            # logits = self.model(unprocessed_input_ids[None], cache=cache)
-            _, logits = self.model(unprocessed_input_ids[None], start_pos, return_logits=True)
+            logits = self.model(unprocessed_input_ids, start_pos, return_logits=True)
             logits = logits[:, -1, :]
 
             if logits_processor is not None:
@@ -209,12 +192,19 @@ class TinygradLM:
                 logits_1d = logits_processor(generated_ids, logits_1d)
                 logits = logits_1d.reshape(1, -1)
 
-            new_token_single, prob = sample(logits)
+            if sampler == "greedy":
+                new_token_single = sample(logits, 0, 0, 0, 0, 0)
+            elif sampler == 'multinomial':
+                assert top_p is not None
+                new_token_single = sample(logits, temperature, 0, top_p, 0, 0)
+            else:
+                raise ValueError(f"Invalid tinygrad sampler: `{sampler}`")
             new_token = new_token_single.item()
-            yield new_token, prob
+            yield new_token
 
             generated_ids.append(new_token)
             unprocessed_input_ids = new_token_single
+            start_pos += 1
 
 def tinygradlm(
     model_name: str,
@@ -257,11 +247,7 @@ def tinygradlm(
             "The `tinygrad` library needs to be installed in order to use `tinygrad` models."
         )
 
-    if device is None:
-        device = Device.DEFAULT
-
-    print('building model...')
+    if device is None: device = Device.DEFAULT
     model = build_olmoe_model(device)
-    print('building tokenizer')
     tokenizer = build_olmoe_tokenizer()
     return TinygradLM(model, tokenizer)
