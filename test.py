@@ -4,7 +4,7 @@ install()
 
 def main():
 
-    model = models.tinygradlm("Qwen/QwQ-32B-Preview")
+    model = models.tinygradlm("gpt2")
     generator = generate.text(model)
     answer = generator("My favorite puppy is")
     ic(answer)
