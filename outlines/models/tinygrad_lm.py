@@ -178,12 +178,12 @@ class TinygradLM:
         # kv cache contains processed input IDs, we pass the unprocessed inputs and cache to model()
         unprocessed_input_ids = prompt
         generated_ids: List[int] = []
-        start_pos = unprocessed_input_ids.shape[1]
+        start_pos = unprocessed_input_ids.shape[1] - 1
         ic(unprocessed_input_ids.shape, unprocessed_input_ids.numpy())
 
         while True:
 
-            logits = self.model(unprocessed_input_ids, start_pos, return_logits=True)
+            logits = self.model(unprocessed_input_ids[:, start_pos:], start_pos, return_logits=True)
             logits = logits[:, -1, :]
 
             if logits_processor is not None:

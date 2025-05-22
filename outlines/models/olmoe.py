@@ -231,7 +231,6 @@ def convert_from_huggingface(weights:dict[str, Tensor], n_layers: int, n_heads: 
   for k,v in experts.items(): sd[k] = Tensor.stack(*[v[i] for i in range(len(v))])
   return sd
 
-
 class MixtureFeedForward:
   def __init__(self, num_experts:int, activated_experts:int, dim:int, hidden_dim:int, linear=nn.Linear):
     self.activated_experts = activated_experts
@@ -252,7 +251,6 @@ class MixtureFeedForward:
     x_down = x_up_gate.dot(self.down_proj[sel].permute(0,2,1))
     return (x_down.float() * probs.reshape(self.activated_experts, 1, 1)).sum(axis=0)
 
-
 def fetch_weights(device=None) -> dict[str, Tensor]:
   # TODO: make this lazy so the 3 fetches can happen in parallel
   if device is None: device = Device.DEFAULT
@@ -260,7 +258,6 @@ def fetch_weights(device=None) -> dict[str, Tensor]:
   m2 = Tensor.from_url("https://huggingface.co/allenai/OLMoE-1B-7B-0924/resolve/main/model-00002-of-00003.safetensors").to(device)
   m3 = Tensor.from_url("https://huggingface.co/allenai/OLMoE-1B-7B-0924/resolve/main/model-00003-of-00003.safetensors").to(device)
   return {**nn.state.safe_load(m1), **nn.state.safe_load(m2), **nn.state.safe_load(m3)}
-
 
 def build_olmoe_model(device):
     with Timing("create model: "):
