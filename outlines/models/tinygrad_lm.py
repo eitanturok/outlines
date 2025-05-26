@@ -175,34 +175,28 @@ class TinygradLM:
         """
 
         temperature: float = temp or 1.0
-
-        # kv cache contains processed input IDs, we pass the unprocessed inputs and cache to model()
-        tokens = prompt
-        generated_ids: List[int] = []
-        start_pos = tokens.shape[1] - 1
-        ic(tokens.shape, tokens.numpy())
+        tokens = prompt.squeeze().tolist()
+        start_pos, prompt_length = len(tokens) - 1, len(tokens)
 
         while True:
-
-            logits = self.model(tokens[:, start_pos:], start_pos).flatten()
+            logits = self.model(Tensor([tokens[start_pos:]]), start_pos).flatten()
             ic(logits.shape)
 
             if logits_processor is not None:
                 # convert to logits_processor 1d expectation, apply, then convert back
-                logits = logits_processor(generated_ids, logits)
+                ic(tokens[prompt_length:])
+                logits = logits_processor(tokens[prompt_length:], logits)
 
             if sampler == "greedy":
-                new_token = sample(logits, 0, 0, 0, 0, 0)
+                new_token = sample(logits, 0, 0, 0, 0, 0).item()
             elif sampler == 'multinomial':
                 if top_p is None: top_p = 1.0
-                new_token = sample(logits, temperature, 0, top_p, 0, 0)
+                new_token = sample(logits, temperature, 0, top_p, 0, 0).item()
             else:
                 raise ValueError(f"Invalid tinygrad sampler: `{sampler}`")
-            new_token_item = new_token.item()
-            yield new_token_item
+            yield new_token
 
-            generated_ids.append(new_token_item)
-            tokens = new_token_item
+            tokens.append(new_token)
             start_pos += 1
 
 def tinygradlm(
