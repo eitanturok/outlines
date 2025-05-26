@@ -35,11 +35,11 @@ class TinygradLM:
     def generate(
         self,
         prompts: Union[str, List[str]],
-        generation_parameters: "GenerationParameters",
-        logits_processor,
-        sampling_parameters: "SamplingParameters",
-    ) -> str:
-        """Generate text using `transformers`.
+        generation_parameters: GenerationParameters,
+        logits_processor: Optional[OutlinesLogitsProcessor],
+        sampling_parameters: SamplingParameters,
+    ) -> Union[str, List[str], List[List[str]]]:
+        """Generate text using `tinygradlm`.
 
         Parameters
         ----------
@@ -68,9 +68,9 @@ class TinygradLM:
     def stream(
         self,
         prompts: Union[str, List[str]],
-        generation_parameters: "GenerationParameters",
+        generation_parameters: GenerationParameters,
         logits_processor,
-        sampling_parameters: "SamplingParameters",
+        sampling_parameters: SamplingParameters,
     ) -> Iterator[str]:
         """Temporary stream stand-in which implements stream() signature
         and equivalent behaviour but isn't yielded until generation completes.
@@ -135,7 +135,7 @@ class TinygradLM:
 
         tokens = []
 
-        for (token, prob), n in zip(
+        for token, n in zip(
             self.generate_step(prompt_tokens, **generate_kwargs),
             range(max_tokens),
         ):
@@ -151,7 +151,7 @@ class TinygradLM:
         temp: Optional[float],
         top_p: Optional[float],
         sampler: str,
-        logits_processor: "OutlinesLogitsProcessor",
+        logits_processor: OutlinesLogitsProcessor,
     ) -> Generator[Tuple[int, float], None, None]:
         """
         Adapted from
@@ -176,34 +176,32 @@ class TinygradLM:
         temperature: float = temp or 1.0
 
         # kv cache contains processed input IDs, we pass the unprocessed inputs and cache to model()
-        unprocessed_input_ids = prompt
+        tokens = prompt
         generated_ids: List[int] = []
-        start_pos = unprocessed_input_ids.shape[1] - 1
-        ic(unprocessed_input_ids.shape, unprocessed_input_ids.numpy())
+        start_pos = tokens.shape[1] - 1
+        ic(tokens.shape, tokens.numpy())
 
         while True:
 
-            logits = self.model(unprocessed_input_ids[:, start_pos:], start_pos, return_logits=True)
-            logits = logits[:, -1, :]
+            logits = self.model(tokens[:, start_pos:], start_pos).flatten()
+            ic(logits.shape)
 
             if logits_processor is not None:
                 # convert to logits_processor 1d expectation, apply, then convert back
-                logits_1d = logits.reshape(-1)
-                logits_1d = logits_processor(generated_ids, logits_1d)
-                logits = logits_1d.reshape(1, -1)
+                logits = logits_processor(generated_ids, logits)
 
             if sampler == "greedy":
-                new_token_single = sample(logits, 0, 0, 0, 0, 0)
+                new_token = sample(logits, 0, 0, 0, 0, 0)
             elif sampler == 'multinomial':
-                assert top_p is not None
-                new_token_single = sample(logits, temperature, 0, top_p, 0, 0)
+                if top_p is None: top_p = 1.0
+                new_token = sample(logits, temperature, 0, top_p, 0, 0)
             else:
                 raise ValueError(f"Invalid tinygrad sampler: `{sampler}`")
-            new_token = new_token_single.item()
-            yield new_token
+            new_token_item = new_token.item()
+            yield new_token_item
 
-            generated_ids.append(new_token)
-            unprocessed_input_ids = new_token_single
+            generated_ids.append(new_token_item)
+            tokens = new_token_item
             start_pos += 1
 
 def tinygradlm(
