@@ -17,9 +17,8 @@ class TinygradTokenizer(TransformerTokenizer):
         input_ids, attention_mask = super().encode(prompt, **kwargs)
         return Tensor(input_ids.numpy()), Tensor(attention_mask.numpy())
     def decode(self, token_ids: "tinygrad.Tensor") -> List[str]:
-        token_ids = [x.cast(dtypes.uint).tolist() for x in token_ids]
+        ic(token_ids)
         return super().decode(token_ids)
-
 
 class TinygradLM:
     """Represents a `tinygrad` model."""
@@ -31,6 +30,8 @@ class TinygradLM:
     ):
         self.model = model
         self.tokenizer = TinygradTokenizer(tokenizer)
+
+        ic(self.tokenizer.decode([35]))
 
     def generate(
         self,
